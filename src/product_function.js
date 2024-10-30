@@ -1,5 +1,5 @@
-// Lambda function for managing products in Node.js without TypeScript
-// Using best practices and JWT authentication with Amazon Cognito
+// Lambda function for managing products in Node.js to be deploy in lambda
+// Using best practices, JWT authentication with Amazon Cognito, and Stored Procedures
 
 const sql = require('mssql');
 const { verify } = require('jsonwebtoken');
@@ -14,22 +14,19 @@ const SQL_SERVER_CONFIG = {
     port: parseInt(process.env.DB_PORT),
     database: process.env.DB_NAME,
     options: {
-        encrypt: true, // Use encryption for data transmission
-        trustServerCertificate: true // Set to true for local development (avoid in production)
+        encrypt: true, // Use encryption
+        trustServerCertificate: true // Set to true for local development
     }
 };
 
-// URL for Cognito's JSON Web Key Set (JWKS), used to verify the token signature
 const COGNITO_JWKS_URI = `https://cognito-idp.${process.env.COGNITO_REGION}.amazonaws.com/${process.env.COGNITO_USER_POOL_ID}/.well-known/jwks.json`;
 
 // Helper function to verify JWT token
 async function verifyToken(token) {
     try {
-        // Verify the token using Cognito's JWKS URI and RS256 algorithm
         const decoded = verify(token, COGNITO_JWKS_URI, { algorithms: ['RS256'] });
         return decoded;
     } catch (err) {
-        // If verification fails, throw unauthorized error
         throw new Error('Unauthorized');
     }
 }
@@ -37,16 +34,13 @@ async function verifyToken(token) {
 // Handler to get the list of products
 exports.getProducts = async () => {
     try {
-        // Connect to SQL Server
         await sql.connect(SQL_SERVER_CONFIG);
-        // Query to get all products from the ProductsTable
-        const result = await sql.query`SELECT * FROM dbo.ProductsTable`;
+        const result = await sql.query`EXEC GetAllProducts`;
         return {
             statusCode: 200,
             body: JSON.stringify(result.recordset)
         };
     } catch (error) {
-        // Handle database connection or query errors
         return {
             statusCode: 500,
             body: JSON.stringify({ error: error.message })
@@ -56,7 +50,6 @@ exports.getProducts = async () => {
 
 // Handler to add a new product
 exports.addProduct = async (event) => {
-    // Retrieve the authorization token from headers
     const token = event.headers.Authorization || event.headers.authorization;
     if (!token) {
         return {
@@ -66,32 +59,26 @@ exports.addProduct = async (event) => {
     }
 
     try {
-        // Verify the token
         await verifyToken(token.replace('Bearer ', ''));
 
-        // Parse product details from request body
-        const { name, description, price, quantity } = JSON.parse(event.body);
+        const { product_id, product_name, description, price, stock_quantity, category, image_url } = JSON.parse(event.body);
 
-        // Check if all required fields are provided
-        if (!name || !description || !price || quantity == null) {
+        if (!product_id || !product_name || !description || !price || stock_quantity == null || !category || !image_url) {
             return {
                 statusCode: 400,
                 body: JSON.stringify({ error: 'Missing required fields' })
             };
         }
 
-        // Connect to SQL Server and insert new product into ProductsTable
         await sql.connect(SQL_SERVER_CONFIG);
         await sql.query`
-            INSERT INTO dbo.ProductsTable (name, description, price, quantity, createdAt)
-            VALUES (${name}, ${description}, ${price}, ${quantity}, GETDATE())
+            EXEC InsertProduct @product_id = ${product_id}, @product_name = ${product_name}, @description = ${description}, @price = ${price}, @stock_quantity = ${stock_quantity}, @category = ${category}, @image_url = ${image_url}
         `;
         return {
             statusCode: 201,
             body: JSON.stringify({ message: 'Product added successfully' })
         };
     } catch (error) {
-        // Handle database connection or query errors
         return {
             statusCode: 500,
             body: JSON.stringify({ error: error.message })
@@ -101,7 +88,6 @@ exports.addProduct = async (event) => {
 
 // Handler to get a specific product by ID
 exports.getProductById = async (event) => {
-    // Retrieve the authorization token from headers
     const token = event.headers.Authorization || event.headers.authorization;
     if (!token) {
         return {
@@ -111,15 +97,12 @@ exports.getProductById = async (event) => {
     }
 
     try {
-        // Verify the token
         await verifyToken(token.replace('Bearer ', ''));
 
-        // Extract productId from the path parameters
-        const { productId } = event.pathParameters;
+        const { product_id } = event.pathParameters;
 
-        // Connect to SQL Server and get the product details
         await sql.connect(SQL_SERVER_CONFIG);
-        const result = await sql.query`SELECT * FROM dbo.ProductsTable WHERE productId = ${productId}`;
+        const result = await sql.query`EXEC GetProductById @product_id = ${product_id}`;
         if (result.recordset.length === 0) {
             return {
                 statusCode: 404,
@@ -132,7 +115,6 @@ exports.getProductById = async (event) => {
             body: JSON.stringify(result.recordset[0])
         };
     } catch (error) {
-        // Handle database connection or query errors
         return {
             statusCode: 500,
             body: JSON.stringify({ error: error.message })
@@ -142,7 +124,6 @@ exports.getProductById = async (event) => {
 
 // Handler to update a product by ID
 exports.updateProduct = async (event) => {
-    // Retrieve the authorization token from headers
     const token = event.headers.Authorization || event.headers.authorization;
     if (!token) {
         return {
@@ -152,38 +133,27 @@ exports.updateProduct = async (event) => {
     }
 
     try {
-        // Verify the token
         await verifyToken(token.replace('Bearer ', ''));
 
-        // Extract productId from the path parameters and updated fields from the request body
-        const { productId } = event.pathParameters;
-        const { name, description, price, quantity } = JSON.parse(event.body);
+        const { product_id } = event.pathParameters;
+        const { product_name, description, price, stock_quantity, category, image_url } = JSON.parse(event.body);
 
-        // If no fields are provided to update, return an error
-        if (!name && !description && !price && quantity == null) {
+        if (!product_name && !description && !price && stock_quantity == null && !category && !image_url) {
             return {
                 statusCode: 400,
                 body: JSON.stringify({ error: 'No fields to update' })
             };
         }
 
-        // Connect to SQL Server and update the product details
         await sql.connect(SQL_SERVER_CONFIG);
         await sql.query`
-            UPDATE dbo.ProductsTable
-            SET 
-                name = ISNULL(${name}, name),
-                description = ISNULL(${description}, description),
-                price = ISNULL(${price}, price),
-                quantity = ISNULL(${quantity}, quantity)
-            WHERE productId = ${productId}
+            EXEC UpdateProduct @product_id = ${product_id}, @product_name = ${product_name}, @description = ${description}, @price = ${price}, @stock_quantity = ${stock_quantity}, @category = ${category}, @image_url = ${image_url}
         `;
         return {
             statusCode: 200,
             body: JSON.stringify({ message: 'Product updated successfully' })
         };
     } catch (error) {
-        // Handle database connection or query errors
         return {
             statusCode: 500,
             body: JSON.stringify({ error: error.message })
@@ -193,7 +163,6 @@ exports.updateProduct = async (event) => {
 
 // Handler to delete a product by ID
 exports.deleteProduct = async (event) => {
-    // Retrieve the authorization token from headers
     const token = event.headers.Authorization || event.headers.authorization;
     if (!token) {
         return {
@@ -203,21 +172,17 @@ exports.deleteProduct = async (event) => {
     }
 
     try {
-        // Verify the token
         await verifyToken(token.replace('Bearer ', ''));
 
-        // Extract productId from the path parameters
-        const { productId } = event.pathParameters;
+        const { product_id } = event.pathParameters;
 
-        // Connect to SQL Server and delete the product from ProductsTable
         await sql.connect(SQL_SERVER_CONFIG);
-        await sql.query`DELETE FROM dbo.ProductsTable WHERE productId = ${productId}`;
+        await sql.query`EXEC DeleteProduct @product_id = ${product_id}`;
         return {
             statusCode: 200,
             body: JSON.stringify({ message: 'Product deleted successfully' })
         };
     } catch (error) {
-        // Handle database connection or query errors
         return {
             statusCode: 500,
             body: JSON.stringify({ error: error.message })
