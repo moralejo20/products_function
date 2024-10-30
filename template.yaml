@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  DBHost:
+    Type: String
+    Description: The host address of the SQL Server database
+  DBPort:
+    Type: String
+    Description: The port for the SQL Server database
+    Default: '1433'
+  DBUsername:
+    Type: String
+    Description: The username for the SQL Server database
+  DBPassword:
+    Type: String
+    Description: The password for the SQL Server database
+    NoEcho: true
+  DBName:
+    Type: String
+    Description: The name of the SQL Server database
+  CognitoRegion:
+    Type: String
+    Description: The AWS region for Cognito
+  CognitoUserPoolId:
+    Type: String
+    Description: The Cognito User Pool ID
+
+Resources:
+  AppApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
+            Identity:
+              Header: Authorization
+            AuthorizationScopes:
+              - "aws.cognito.signin.user.admin"
+      Name: AppApiGateway
+      StageName: Prod
+      EndpointConfiguration:
+        Type: REGIONAL
+      Cors: "'*'"
+
+  ProductsLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ProductsLambdaFunction
+      Handler: src/product_function.getProducts
+      Runtime: nodejs20.x
+      Architectures:
+        - arm64  # Usar arquitectura ARM
+      Environment:
+        Variables:
+          DB_HOST: !Ref DBHost
+          DB_PORT: !Ref DBPort
+          DB_USERNAME: !Ref DBUsername
+          DB_PASSWORD: !Ref DBPassword
+          DB_NAME: !Ref DBName
+          COGNITO_REGION: !Ref CognitoRegion
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+      Events:
+        GetProducts:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AppApiGateway
+            Path: /products
+            Method: GET
+        PostProduct:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AppApiGateway
+            Path: /products
+            Method: POST
+        GetProductById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AppApiGateway
+            Path: /products/{productId}
+            Method: GET
+        PutProductById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AppApiGateway
+            Path: /products/{productId}
+            Method: PUT
+        DeleteProductById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AppApiGateway
+            Path: /products/{productId}
+            Method: DELETE
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 128
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaSQLServerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
